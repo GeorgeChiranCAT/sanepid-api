@@ -53,3 +53,52 @@ exports.getLocations = async (req, res) => {
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
+
+// Add this method to sanepid-api/controllers/locationsController.js
+exports.getLocationById = async (req, res) => {
+    try {
+        const locationId = req.params.id;
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({ message: 'Authentication required' });
+        }
+
+        // Get user role first
+        const userResult = await db.query(
+            'SELECT role FROM users WHERE id = $1',
+            [userId]
+        );
+
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const userRole = userResult.rows[0].role;
+
+        // Check if user has access to this location
+        const accessCheck = await db.query(
+            'SELECT 1 FROM user_locations WHERE user_id = $1 AND location_id = $2',
+            [userId, locationId]
+        );
+
+        if (accessCheck.rows.length === 0) {
+            return res.status(403).json({ message: 'You do not have access to this location' });
+        }
+
+        // Get location details
+        const result = await db.query(
+            'SELECT * FROM locations WHERE id = $1',
+            [locationId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: 'Location not found' });
+        }
+
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error('Error fetching location from database:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
