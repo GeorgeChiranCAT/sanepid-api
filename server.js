@@ -19,6 +19,7 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/locations', locationsRoutes);
 app.use('/api/categories', require('./routes/categoriesRoutes'));
+app.use('/api/category-details', require('./routes/categoryDetailsRoutes'));
 
 // Other routes...
 app.use('/api/controls', (req, res) => {
