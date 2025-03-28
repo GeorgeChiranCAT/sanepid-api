@@ -1,7 +1,6 @@
 // sanepid-api/controllers/controlsController.js
 const db = require('../config/db');
 
-
 // Add this validation helper function
 function validateFrequencyConfig(frequencyType, config) {
     if (!config) return false;
@@ -11,12 +10,12 @@ function validateFrequencyConfig(frequencyType, config) {
             // No additional validation needed
             return true;
         case 'weekly':
-            if (!config.dayOfWeek || config.dayOfWeek < 0 || config.dayOfWeek > 6) {
+            if (!config.dayOfWeek && config.dayOfWeek !== 0 || config.dayOfWeek < 0 || config.dayOfWeek > 6) {
                 return false;
             }
             return true;
         case 'monthly':
-            if (!config.dayOfMonth || config.dayOfMonth < 1 || config.dayOfMonth > 26) {
+            if (!config.dayOfMonth || config.dayOfMonth < 1 || config.dayOfMonth > 31) {
                 return false;
             }
             return true;
@@ -39,30 +38,35 @@ function validateFrequencyConfig(frequencyType, config) {
 }
 
 // get location controls
-// Update location controls query to reflect new column names
 exports.getLocationControls = async (req, res) => {
     try {
         const locationId = req.params.locationId;
 
         const result = await db.query(
-            `SELECT lc.id, lc.location_id, lc.control_categories_id, lc.frequency_type, lc.frequency_config, 
-                    lc.start_date, lc.end_date, lc.is_active, 
+            `SELECT lc.id, lc.location_id, lc.control_categories_id as category_id, lc.frequency_type, lc.frequency_config,
+                    lc.start_date, lc.end_date, lc.is_active, lc.created_at, lc.updated_at,
                     cc.category, cc.subcategory
              FROM location_controls lc
-             JOIN control_categories cc ON lc.control_categories_id = cc.id
+                      JOIN control_categories cc ON lc.control_categories_id = cc.id
              WHERE lc.location_id = $1
              ORDER BY cc.category, cc.subcategory, lc.id`,
             [locationId]
         );
 
-        res.json(result.rows);
+        // Format the frequency_config as JSON if it's stored as a string
+        const formattedResults = result.rows.map(row => ({
+            ...row,
+            frequency_config: typeof row.frequency_config === 'string'
+                ? JSON.parse(row.frequency_config)
+                : row.frequency_config
+        }));
+
+        res.json(formattedResults);
     } catch (error) {
         console.error('Error fetching location controls:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
-
-
 
 // Create a new control for a location
 exports.createLocationControl = async (req, res) => {
@@ -85,8 +89,27 @@ exports.createLocationControl = async (req, res) => {
             });
         }
 
+        // Ensure frequency_config is properly formatted
+        let configToSave = frequency_config;
+
+        // If it's a string, try to parse it
+        if (typeof frequency_config === 'string') {
+            try {
+                configToSave = JSON.parse(frequency_config);
+            } catch (e) {
+                return res.status(400).json({
+                    message: 'Invalid frequency configuration format'
+                });
+            }
+        }
+
+        // If it's null or undefined, set an empty object
+        if (!configToSave) {
+            configToSave = {};
+        }
+
         // Validate frequency config
-        if (!validateFrequencyConfig(frequency_type, frequency_config)) {
+        if (!validateFrequencyConfig(frequency_type, configToSave)) {
             return res.status(400).json({
                 message: 'Invalid frequency configuration for the selected frequency type'
             });
@@ -94,13 +117,38 @@ exports.createLocationControl = async (req, res) => {
 
         const result = await db.query(
             `INSERT INTO location_controls
-             (location_id, category_id, frequency_type, frequency_config, start_date, end_date, is_active)
+             (location_id, control_categories_id, frequency_type, frequency_config, start_date, end_date, is_active)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING *`,
-            [locationId, category_id, frequency_type, frequency_config, start_date, end_date || null, is_active]
+            [
+                locationId,
+                category_id,
+                frequency_type,
+                JSON.stringify(configToSave),
+                start_date,
+                end_date || null,
+                is_active === undefined ? true : is_active
+            ]
         );
 
-        res.status(201).json(result.rows[0]);
+        // Get the category info to include in response
+        const categoryResult = await db.query(
+            `SELECT category, subcategory FROM control_categories WHERE id = $1`,
+            [category_id]
+        );
+
+        // Combine the data
+        const controlWithCategory = {
+            ...result.rows[0],
+            category: categoryResult.rows[0]?.category,
+            subcategory: categoryResult.rows[0]?.subcategory,
+            // Ensure frequency_config is parsed back from string
+            frequency_config: typeof result.rows[0].frequency_config === 'string'
+                ? JSON.parse(result.rows[0].frequency_config)
+                : result.rows[0].frequency_config
+        };
+
+        res.status(201).json(controlWithCategory);
     } catch (error) {
         console.error('Error creating location control:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
@@ -112,12 +160,23 @@ exports.updateLocationControl = async (req, res) => {
     try {
         const { locationId, controlId } = req.params;
         const {
+            category_id,
             frequency_type,
             frequency_config,
             start_date,
             end_date,
             is_active
         } = req.body;
+
+        // Check if the control exists
+        const checkResult = await db.query(
+            `SELECT id FROM location_controls WHERE id = $1 AND location_id = $2`,
+            [controlId, locationId]
+        );
+
+        if (checkResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Control not found' });
+        }
 
         // Validate frequency type if provided
         if (frequency_type) {
@@ -129,32 +188,98 @@ exports.updateLocationControl = async (req, res) => {
             }
         }
 
+        // Ensure frequency_config is properly formatted
+        let configToSave = frequency_config;
+
+        // If it's a string, try to parse it
+        if (typeof frequency_config === 'string') {
+            try {
+                configToSave = JSON.parse(frequency_config);
+            } catch (e) {
+                return res.status(400).json({
+                    message: 'Invalid frequency configuration format'
+                });
+            }
+        }
+
+        // If it's null or undefined, set an empty object
+        if (!configToSave) {
+            configToSave = {};
+        }
+
         // Validate frequency config if provided
-        if (frequency_type && frequency_config) {
-            if (!validateFrequencyConfig(frequency_type, frequency_config)) {
+        if (frequency_type && configToSave) {
+            if (!validateFrequencyConfig(frequency_type, configToSave)) {
                 return res.status(400).json({
                     message: 'Invalid frequency configuration for the selected frequency type'
                 });
             }
         }
 
-        const result = await db.query(
-            `UPDATE location_controls
-             SET frequency_type = $1,
-                 frequency_config = $2,
-                 start_date = $3,
-                 end_date = $4,
-                 is_active = $5
-             WHERE id = $6 AND location_id = $7
-                 RETURNING *`,
-            [frequency_type, frequency_config, start_date, end_date || null, is_active, controlId, locationId]
-        );
+        // Build SQL query dynamically based on provided fields
+        let updateQuery = 'UPDATE location_controls SET updated_at = NOW()';
+        const params = [];
+        let paramIndex = 1;
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({ message: 'Control not found' });
+        if (category_id !== undefined) {
+            updateQuery += `, control_categories_id = $${paramIndex}`;
+            params.push(category_id);
+            paramIndex++;
         }
 
-        res.json(result.rows[0]);
+        if (frequency_type !== undefined) {
+            updateQuery += `, frequency_type = $${paramIndex}`;
+            params.push(frequency_type);
+            paramIndex++;
+        }
+
+        if (frequency_config !== undefined) {
+            updateQuery += `, frequency_config = $${paramIndex}`;
+            params.push(JSON.stringify(configToSave));
+            paramIndex++;
+        }
+
+        if (start_date !== undefined) {
+            updateQuery += `, start_date = $${paramIndex}`;
+            params.push(start_date);
+            paramIndex++;
+        }
+
+        if (end_date !== undefined) {
+            updateQuery += `, end_date = $${paramIndex}`;
+            params.push(end_date || null);
+            paramIndex++;
+        }
+
+        if (is_active !== undefined) {
+            updateQuery += `, is_active = $${paramIndex}`;
+            params.push(is_active);
+            paramIndex++;
+        }
+
+        updateQuery += ` WHERE id = $${paramIndex} AND location_id = $${paramIndex + 1} RETURNING *`;
+        params.push(controlId, locationId);
+
+        const result = await db.query(updateQuery, params);
+
+        // Get the category info to include in response
+        const categoryResult = await db.query(
+            `SELECT category, subcategory FROM control_categories WHERE id = $1`,
+            [result.rows[0].control_categories_id]
+        );
+
+        // Combine the data
+        const controlWithCategory = {
+            ...result.rows[0],
+            category: categoryResult.rows[0]?.category,
+            subcategory: categoryResult.rows[0]?.subcategory,
+            // Ensure frequency_config is parsed back from string
+            frequency_config: typeof result.rows[0].frequency_config === 'string'
+                ? JSON.parse(result.rows[0].frequency_config)
+                : result.rows[0].frequency_config
+        };
+
+        res.json(controlWithCategory);
     } catch (error) {
         console.error('Error updating location control:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
@@ -169,7 +294,7 @@ exports.deleteLocationControl = async (req, res) => {
         const result = await db.query(
             `DELETE FROM location_controls
              WHERE id = $1 AND location_id = $2
-             RETURNING id`,
+                 RETURNING id`,
             [controlId, locationId]
         );
 

@@ -8,5 +8,11 @@ const authMiddleware = require('../middleware/authMiddleware');
 // This route now requires authentication
 router.get('/', authMiddleware, locationsController.getLocations);
 router.get('/:id', authMiddleware, locationsController.getLocationById);
+
+// Location controls routes
 router.get('/:locationId/controls', authMiddleware, controlsController.getLocationControls);
+router.post('/:locationId/controls', authMiddleware, controlsController.createLocationControl);
+router.put('/:locationId/controls/:controlId', authMiddleware, controlsController.updateLocationControl);
+router.delete('/:locationId/controls/:controlId', authMiddleware, controlsController.deleteLocationControl);
+
 module.exports = router;
