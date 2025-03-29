@@ -1,5 +1,6 @@
 // sanepid-api/controllers/controlsController.js
 const db = require('../config/db');
+const instanceGenerator = require('../services/instanceGeneratorService');
 
 // Add this validation helper function
 function validateFrequencyConfig(frequencyType, config) {
@@ -109,7 +110,7 @@ exports.createLocationControl = async (req, res) => {
         }
 
         // Validate frequency config
-        if (!validateFrequencyConfig(frequency_type, configToSave)) {
+        if (!instanceGenerator.validateFrequencyConfig(frequency_type, configToSave)) {
             return res.status(400).json({
                 message: 'Invalid frequency configuration for the selected frequency type'
             });
@@ -119,7 +120,7 @@ exports.createLocationControl = async (req, res) => {
             `INSERT INTO location_controls
              (location_id, control_categories_id, frequency_type, frequency_config, start_date, end_date, is_active)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
-             RETURNING *`,
+                 RETURNING *`,
             [
                 locationId,
                 category_id,
@@ -148,6 +149,14 @@ exports.createLocationControl = async (req, res) => {
                 : result.rows[0].frequency_config
         };
 
+        // Generate instances for this control
+        const now = new Date();
+        await instanceGenerator.generateInstancesForControl(
+            result.rows[0].id,
+            now.getFullYear(),
+            now.getMonth()
+        );
+
         res.status(201).json(controlWithCategory);
     } catch (error) {
         console.error('Error creating location control:', error);
@@ -156,6 +165,7 @@ exports.createLocationControl = async (req, res) => {
 };
 
 // Update a control for a location
+// Update the updateLocationControl function
 exports.updateLocationControl = async (req, res) => {
     try {
         const { locationId, controlId } = req.params;
@@ -202,14 +212,14 @@ exports.updateLocationControl = async (req, res) => {
             }
         }
 
-        // If it's null or undefined, set an empty object
-        if (!configToSave) {
+        // If it's null or undefined and frequency_type is provided, set an empty object
+        if (!configToSave && frequency_type) {
             configToSave = {};
         }
 
         // Validate frequency config if provided
         if (frequency_type && configToSave) {
-            if (!validateFrequencyConfig(frequency_type, configToSave)) {
+            if (!instanceGenerator.validateFrequencyConfig(frequency_type, configToSave)) {
                 return res.status(400).json({
                     message: 'Invalid frequency configuration for the selected frequency type'
                 });
@@ -262,6 +272,30 @@ exports.updateLocationControl = async (req, res) => {
 
         const result = await db.query(updateQuery, params);
 
+        // If frequency settings changed, regenerate future instances
+        if (frequency_type !== undefined || frequency_config !== undefined ||
+            start_date !== undefined || end_date !== undefined ||
+            is_active !== undefined) {
+
+            // Delete any future instances
+            await db.query(
+                `DELETE FROM control_instances
+                 WHERE location_control_id = $1 
+                 AND scheduled_date >= CURRENT_DATE`,
+                [controlId]
+            );
+
+            // Generate new instances only for current and future dates
+            if (result.rows[0].is_active) {
+                const now = new Date();
+                await instanceGenerator.generateInstancesForControl(
+                    controlId,
+                    now.getFullYear(),
+                    now.getMonth()
+                );
+            }
+        }
+
         // Get the category info to include in response
         const categoryResult = await db.query(
             `SELECT category, subcategory FROM control_categories WHERE id = $1`,
@@ -305,6 +339,57 @@ exports.deleteLocationControl = async (req, res) => {
         res.json({ message: 'Control deleted successfully' });
     } catch (error) {
         console.error('Error deleting location control:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+// Add a new endpoint to view control history
+exports.getControlHistory = async (req, res) => {
+    try {
+        const { controlId } = req.params;
+
+        // Get control details
+        const controlResult = await db.query(
+            `SELECT lc.*, cc.category, cc.subcategory
+             FROM location_controls lc
+             JOIN control_categories cc ON lc.control_categories_id = cc.id
+             WHERE lc.id = $1`,
+            [controlId]
+        );
+
+        if (controlResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Control not found' });
+        }
+
+        // Get past instances
+        const instancesResult = await db.query(
+            `SELECT ci.*
+             FROM control_instances ci
+             WHERE ci.location_control_id = $1
+             AND ci.scheduled_date < CURRENT_DATE
+             ORDER BY ci.scheduled_date DESC`,
+            [controlId]
+        );
+
+        // Format the response
+        const response = {
+            control: {
+                ...controlResult.rows[0],
+                frequency_config: typeof controlResult.rows[0].frequency_config === 'string'
+                    ? JSON.parse(controlResult.rows[0].frequency_config)
+                    : controlResult.rows[0].frequency_config
+            },
+            pastInstances: instancesResult.rows.map(row => ({
+                ...row,
+                measurements: typeof row.measurements === 'string'
+                    ? JSON.parse(row.measurements)
+                    : row.measurements
+            }))
+        };
+
+        res.json(response);
+    } catch (error) {
+        console.error('Error fetching control history:', error);
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 };

@@ -14,5 +14,6 @@ router.get('/:locationId/controls', authMiddleware, controlsController.getLocati
 router.post('/:locationId/controls', authMiddleware, controlsController.createLocationControl);
 router.put('/:locationId/controls/:controlId', authMiddleware, controlsController.updateLocationControl);
 router.delete('/:locationId/controls/:controlId', authMiddleware, controlsController.deleteLocationControl);
+router.get('/:locationId/controls/:controlId/history', authMiddleware, controlsController.getControlHistory);
 
 module.exports = router;

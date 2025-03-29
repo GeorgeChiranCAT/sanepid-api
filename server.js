@@ -5,7 +5,7 @@ require('dotenv').config();
 
 const authRoutes = require('./routes/authRoutes');
 const locationsRoutes = require('./routes/locationsRoutes'); // Add this line
-
+const instancesRoutes = require('./routes/instancesRoutes');
 const app = express();
 const PORT = process.env.PORT || 8080;
 
@@ -20,6 +20,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/locations', locationsRoutes);
 app.use('/api/categories', require('./routes/categoriesRoutes'));
 app.use('/api/category-details', require('./routes/categoryDetailsRoutes'));
+app.use('/api/instances', instancesRoutes);
+app.use('/api/reports', require('./routes/reportsRoutes'));
 
 // Other routes...
 app.use('/api/controls', (req, res) => {
@@ -42,3 +44,6 @@ app.get('/api/test', (req, res) => {
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
+
+// Set up scheduled tasks
+require('./scheduledTasks');
