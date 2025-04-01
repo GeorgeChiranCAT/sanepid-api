@@ -13,5 +13,5 @@ router.get('/location/:locationId', authMiddleware, instancesController.getLocat
 router.get('/:instanceId', authMiddleware, instancesController.getInstanceById);
 router.put('/:instanceId/complete', authMiddleware, instancesController.completeInstance);
 router.put('/:instanceId/missed', authMiddleware, instancesController.reportMissed);
-
+router.get('/instances/:locationId', authMiddleware, instancesController.getLocationInstances);
 module.exports = router;

@@ -305,6 +305,42 @@ async function generateInstancesForControl(controlId, year, month) {
     }
 }
 
+// Function to update statuses of expired control instances
+async function updateExpiredControlInstances() {
+    try {
+        const currentDate = moment().startOf('day').toISOString();
+
+        // Find all pending instances from previous days that weren't completed
+        const expiredInstances = await db.query(
+            `UPDATE control_instances
+             SET status = 'missed'
+             WHERE status = 'pending'
+             AND scheduled_date < $1
+             AND completed_at IS NULL
+             RETURNING id, location_control_id, scheduled_date`,
+            [currentDate]
+        );
+
+        console.log(`Updated ${expiredInstances.rows.length} expired control instances to 'missed' status`);
+
+        // Create missed control records to document the missed controls
+        for (const instance of expiredInstances.rows) {
+            await db.query(
+                `INSERT INTO missed_controls
+                 (control_instance_id, reason, standard_excuse, reported_by, reported_at)
+                 VALUES ($1, 'Automatically marked as missed', 'Control not completed on scheduled date', 'System', $2)`,
+                [instance.id, moment().toISOString()]
+            );
+        }
+
+        return { success: true, updatedCount: expiredInstances.rows.length };
+    } catch (error) {
+        console.error('Error updating expired control instances:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+
 // Helper function to validate frequency config
 function validateFrequencyConfig(frequencyType, config) {
     if (!config) return false;
@@ -344,5 +380,6 @@ function validateFrequencyConfig(frequencyType, config) {
 module.exports = {
     generateInstancesForMonth,
     generateInstancesForControl,
-    validateFrequencyConfig
+    validateFrequencyConfig,
+    updateExpiredControlInstances
 };
